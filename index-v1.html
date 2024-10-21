@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapbox GeoJSON Layer with Bounding Box</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.9.1/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.9.1/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+    <script>
+        const appData = {
+            colors: []
+        }
+        mapboxgl.accessToken = 'pk.eyJ1IjoidnRkaXJ0IiwiYSI6ImNqa2l1dnAyeDE5NDUzcXM2NGJ1azB4bWkifQ.NZPAmWBznveUQa6ytjRlGg';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/light-v10',
+            center: [153, -27], // Roughly centered on Queensland, Australia
+            zoom: 6
+        });
+
+        fetch('https://spatial-gis.information.qld.gov.au/arcgis/rest/services/GeoscientificInformation/GeologyDetailed/MapServer/15?f=pjson')
+            .then(response => response.json())
+            .then(data => {
+                console.log(data);  // Log the response
+
+                appData.colors = data.drawingInfo.renderer.uniqueValueInfos.map(info => {
+                    return {
+                        value: info.value,
+                        color: `rgba(${info.symbol.color.join(',')})`
+                    }
+                });
+            })
+
+        //colors
+        //https://spatial-gis.information.qld.gov.au/arcgis/rest/services/GeoscientificInformation/GeologyDetailed/MapServer/15?f=pjson
+
+        map.on('load', function () {
+
+            map.addSource('qld-elevation', {
+                'type': 'raster',
+                'tiles': ['https://spatial-img.information.qld.gov.au/arcgis/rest/services/Elevation/DEM_TimeSeries_AllUsers/ImageServer/exportImage?bbox={bbox-epsg-3857}&bboxSR=3857&size=256,256&imageSR=3857&format=png&transparent=true&f=image'],
+                'tileSize': 256
+            });
+
+            map.addLayer({
+                'id': 'qld-elevation-layer',
+                'type': 'raster',
+                'source': 'qld-elevation',
+                'paint': {
+                    'raster-opacity': 0.7
+                }
+            });
+
+            map.addSource('geology', {
+                type: 'geojson',
+                data: {
+                    type: 'FeatureCollection',
+                    features: []
+                },
+                generateId: true
+            });
+
+            map.addLayer({
+                id: 'geology-layer',
+                type: 'fill',
+                source: 'geology',
+                paint: {
+                    'fill-color': ['get', 'color'],
+                    'fill-opacity': 0.7
+                }
+            });
+            map.addLayer({
+                id: 'geology-symbol',
+                type: 'symbol',
+                source: 'geology',
+                layout: {
+                    'text-field': ['get', 'map_symbol'],
+                    'text-font': ['Open Sans Regular'],
+                    'text-size': 12
+                }
+            });
+            map.on('moveend', updateGeologyLayer);
+
+            map.on('click', 'geology-layer', function (e) {
+                const feature = e.features[0];
+                console.log(feature.properties);
+            });
+
+            // updateGeologyLayer();
+
+        });
+
+        function updateGeologyLayer() {
+            const bounds = map.getBounds();
+            const sw = bounds.getSouthWest();
+            const ne = bounds.getNorthEast();
+
+            const geometryJSON = JSON.stringify({
+                xmin: sw.lng, ymin: sw.lat,
+                xmax: ne.lng, ymax: ne.lat,
+                spatialReference: { wkid: 4326 }
+            });
+
+            const url = 'https://spatial-gis.information.qld.gov.au/arcgis/rest/services/GeoscientificInformation/GeologyDetailed/MapServer/15/query?' +
+                'where=1=1' +
+                '&geometryType=esriGeometryEnvelope' +
+                '&spatialRel=esriSpatialRelIntersects' +
+                '&outFields=*' +
+                '&outSR=4326' +
+                '&f=geojson' +
+                `&geometry=${encodeURIComponent(geometryJSON)}` +
+                '&inSR=4326' +
+                '&returnGeometry=true';
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.features && data.features.length > 0) {
+                        data.features.forEach(feature => {
+                            const color = appData.colors.find(color => color.value === feature.properties.legend)?.color;
+                            feature.properties.color = color;
+                        });
+                        map.getSource('geology').setData(data);
+                    } else {
+                        console.log('No features in current extent');
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+    </script>
+</body>
+
+</html>
